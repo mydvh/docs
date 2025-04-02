@@ -1,0 +1,202 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-develop-secret
+  namespace: minio
+  annotations:
+  selfLink: /api/v1/namespaces/devops/secrets/minio-develop-secret
+data:
+  rootPassword: djVlMTZyMHZtdmc0OGNyZTVqeG0=
+  rootUser: bWluaW8=
+type: Opaque
+===========
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-develop
+  namespace: minio
+  labels:
+    k8slens-edit-resource-version: v1
+  annotations:
+    kubernetes.digitalocean.com/load-balancer-id: a42f0ba1-259c-8449-c9d0-68507eb36bbe
+  selfLink: /api/v1/namespaces/devminio/services/minio-develop
+status:
+  loadBalancer: {}
+spec:
+  ports:
+    - name: api
+      protocol: TCP
+      port: 9000
+      targetPort: 9000
+    - name: console
+      protocol: TCP
+      port: 9001
+      targetPort: 9001
+  selector:
+    app: minio
+  type: ClusterIP
+  sessionAffinity: None
+  ipFamilies:
+    - IPv4
+  ipFamilyPolicy: SingleStack
+  internalTrafficPolicy: Cluster
+  ===========
+
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  annotations:
+  name: apo-minio-develop-letsencrypt
+  namespace: minio
+  selfLink: >-
+    /apis/cert-manager.io/v1/namespaces/minio/issuers/apo-minio-develop-letsencrypt
+spec:
+  acme:
+    email: hoang.dinh@bnksolution.com
+    privateKeySecretRef:
+      name: apo-minio-develop-tls
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+=================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: apo-minio-develop-ingress
+  namespace: minio
+  labels:
+    app: apo-minio-develop
+    k8slens-edit-resource-version: v1
+  annotations:
+    cert-manager.io/issuer: apo-minio-develop-letsencrypt
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: 'true'
+  selfLink: >-
+    /apis/networking.k8s.io/v1/namespaces/minio/ingresses/apo-minio-develop-ingress
+status:
+  loadBalancer: {}
+spec:
+  tls:
+    - hosts:
+        - apo-minio.idpdev.bnksolution.com
+        - apo-minio-console.idpdev.bnksolution.com
+      secretName: apo-minio-develop-ingress-tls
+  rules:
+    - host: apo-minio.idpdev.bnksolution.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-develop
+                port:
+                  number: 9000
+    - host: apo-minio-console.idpdev.bnksolution.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-develop
+                port:
+                  number: 9001
+==================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-develop
+  namespace: minio
+  annotations:
+    pv.kubernetes.io/bind-completed: 'yes'
+    pv.kubernetes.io/bound-by-controller: 'yes'
+    volume.beta.kubernetes.io/storage-provisioner: dobs.csi.digitalocean.com
+    volume.kubernetes.io/storage-provisioner: dobs.csi.digitalocean.com
+  finalizers:
+    - kubernetes.io/pvc-protection
+  selfLink: /api/v1/namespaces/minio/persistentvolumeclaims/minio-develop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi  
+  volumeName: pvc-e6eebab7-c451-4851-967d-e7f10ced5a07
+  storageClassName: do-block-storage
+  volumeMode: Filesystem
+  ===================
+
+  apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-develop
+  namespace: minio
+  labels:
+    k8slens-edit-resource-version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio-develop
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: minio-develop
+    spec:
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-develop
+      containers:
+        - name: minio
+          image: quay.io/minio/minio
+          args:
+            - server
+            - /data
+            - '--console-address'
+            - ':9001'
+          ports:
+            - containerPort: 9000
+              protocol: TCP
+            - containerPort: 9001
+              protocol: TCP
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-develop-secret
+                  key: rootUser
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-develop-secret
+                  key: rootPassword
+            - name: MINIO_SERVER_URL
+              value: https://apo-minio.idpdev.bnksolution.com
+          resources: {}
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+===============
