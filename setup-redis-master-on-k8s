@@ -1,0 +1,310 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-sit/secrets/redis
+data:
+  redis-password: S21McHRBM1RmSjRMYTd6bQ==
+type: Opaque
+
+====================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/component: master
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-sit/services/redis-master
+status:
+  loadBalancer: {}
+spec:
+  ports:
+    - name: tcp-redis
+      protocol: TCP
+      port: 6379
+      targetPort: redis
+  selector:
+    app.kubernetes.io/component: master
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/name: redis
+  type: ClusterIP
+  sessionAffinity: None
+  ipFamilies:
+    - IPv4
+  ipFamilyPolicy: SingleStack
+  internalTrafficPolicy: Cluster
+
+==============
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-sit/services/redis-headless
+status:
+  loadBalancer: {}
+spec:
+  ports:
+    - name: tcp-redis
+      protocol: TCP
+      port: 6379
+      targetPort: redis
+  selector:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/name: redis
+  clusterIP: None
+  clusterIPs:
+    - None
+  type: ClusterIP
+  sessionAffinity: None
+  ipFamilies:
+    - IPv4
+  ipFamilyPolicy: SingleStack
+  internalTrafficPolicy: Cluster
+===============
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-configuration
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-sit/configmaps/redis-configuration
+data:
+  master.conf: |-
+    dir /data
+    # User-supplied master configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of master configuration
+  redis.conf: |-
+    # User-supplied common configuration:
+    # Enable AOF https://redis.io/topics/persistence#append-only-file
+    appendonly yes
+    # Disable RDB persistence, AOF persistence already enabled.
+    save ""
+    # End of common configuration
+  replica.conf: |-
+    dir /data
+    # User-supplied replica configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of replica configuration
+
+=============
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-health
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-sit/configmaps/redis-health
+data:
+  ping_liveness_local.sh: >-
+    #!/bin/bash
+
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(<
+    "${REDIS_PASSWORD_FILE}")"
+
+    [[ -n "$REDIS_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_PASSWORD"
+
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ] && [
+    "$responseFirstWord" != "MASTERDOWN" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_liveness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_liveness_master.sh: >-
+    #!/bin/bash
+
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(<
+    "${REDIS_MASTER_PASSWORD_FILE}")"
+
+    [[ -n "$REDIS_MASTER_PASSWORD" ]] && export
+    REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local.sh: >-
+    #!/bin/bash
+
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(<
+    "${REDIS_PASSWORD_FILE}")"
+
+    [[ -n "$REDIS_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_PASSWORD"
+
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_readiness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_readiness_master.sh: >-
+    #!/bin/bash
+
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(<
+    "${REDIS_MASTER_PASSWORD_FILE}")"
+
+    [[ -n "$REDIS_MASTER_PASSWORD" ]] && export
+    REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+=============
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-master
+  namespace: idp-develop
+  uid: 63569800-5d14-4409-95bb-698dcd242b0c
+  resourceVersion: '11193707'
+  creationTimestamp: '2024-11-15T04:40:22Z'
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-develop
+  selfLink: /api/v1/namespaces/idp-develop/serviceaccounts/redis-master
+automountServiceAccountToken: true
+
+===========
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-master
+  namespace: idp-sit
+  labels:
+    app.kubernetes.io/instance: redis
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.4.1
+    helm.sh/chart: redis-20.3.0
+  annotations:
+    meta.helm.sh/release-name: redis
+    meta.helm.sh/release-namespace: idp-sit
+  selfLink: /api/v1/namespaces/idp-develop/serviceaccounts/redis-master
+automountServiceAccountToken: true
+
+==================
